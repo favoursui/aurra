@@ -1,6 +1,6 @@
 # Aurra - DeFi Copilot on Solana
 
-> Talk to your wallet. Aurra is an AI-powered DeFi copilot that lets you manage your Solana portfolio using plain English — no dashboards, no jargon, no confusion.
+> Talk to your wallet. Aurra is an AI-powered DeFi copilot that lets you manage your Solana portfolio using plain English, no dashboards, no jargon, no confusion.
 
 ---
 

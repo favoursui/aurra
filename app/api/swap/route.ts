@@ -1,128 +1,106 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-interface JupiterToken {
-  address: string;
-  symbol: string;
-  decimals: number;
-  name: string;
-}
+const HELIUS_URL = `https://mainnet.helius-rpc.com/?api-key=${process.env.NEXT_PUBLIC_HELIUS_API_KEY}`;
 
-// In-memory cache so we don't hammer Jupiter on every request
-let tokenCache: JupiterToken[] | null = null;
-let tokenCacheTime = 0;
-const CACHE_TTL = 1000 * 60 * 60; // 1 hour
+const TOKEN_MINTS: Record<string, { address: string; decimals: number }> = {
+  SOL:     { address: 'So11111111111111111111111111111111111111112', decimals: 9 },
+  USDC:    { address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 },
+  USDT:    { address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6 },
+  BONK:    { address: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', decimals: 5 },
+  JUP:     { address: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', decimals: 6 },
+  WIF:     { address: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm', decimals: 6 },
+  PYTH:    { address: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', decimals: 6 },
+  mSOL:    { address: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So', decimals: 9 },
+  jitoSOL: { address: 'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn', decimals: 9 },
+  RAY:     { address: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', decimals: 6 },
+};
 
-async function getTokenList(): Promise<JupiterToken[]> {
-  const now = Date.now();
-  if (tokenCache && now - tokenCacheTime < CACHE_TTL) return tokenCache;
+async function getQuoteAndSwapTx(
+  inputToken: { address: string; decimals: number },
+  outputToken: { address: string; decimals: number },
+  amountIn: number,
+  userPublicKey: string,
+  fromToken: string,
+  toToken: string,
+) {
+  // Try Helius first
+  try {
+    const quoteRes = await fetch(HELIUS_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 'quote', method: 'getQuote',
+        params: { inputMint: inputToken.address, outputMint: outputToken.address, amount: amountIn, slippageBps: 50 },
+      }),
+    });
+    const quoteData = await quoteRes.json();
+    if (!quoteData.error && quoteData.result) {
+      const quote = quoteData.result;
+      const swapRes = await fetch(HELIUS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 'swap', method: 'getSwapTransaction',
+          params: { quoteResponse: quote, userPublicKey, wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true, prioritizationFeeLamports: 'auto' },
+        }),
+      });
+      const swapData = await swapRes.json();
+      if (!swapData.error && swapData.result?.swapTransaction) {
+        const outAmount = parseInt(quote.outAmount) / Math.pow(10, outputToken.decimals);
+        return {
+          swapTransaction: swapData.result.swapTransaction,
+          summary: { fromToken, toToken, inputAmount: amountIn / Math.pow(10, inputToken.decimals), outputAmount: outAmount, priceImpactPct: parseFloat(quote.priceImpactPct || '0'), route: quote.routePlan?.map((r: any) => r.swapInfo?.label).filter(Boolean).join(' → ') || 'Jupiter' },
+        };
+      }
+    }
+  } catch {}
 
-  const res = await fetch('https://token.jup.ag/strict', {
-    headers: { 'Accept': 'application/json' },
+  // Fall back to Jupiter directly
+  const quoteRes = await fetch(
+    `https://quote-api.jup.ag/v6/quote?inputMint=${inputToken.address}&outputMint=${outputToken.address}&amount=${amountIn}&slippageBps=50`,
+    { headers: { Accept: 'application/json' } }
+  );
+  const quote = await quoteRes.json();
+  if (quote.error) throw new Error(quote.error);
+
+  const swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quoteResponse: quote, userPublicKey, wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true, prioritizationFeeLamports: 'auto' }),
   });
-  const data: JupiterToken[] = await res.json();
-  tokenCache = data;
-  tokenCacheTime = now;
-  return data;
+  const swapData = await swapRes.json();
+  if (swapData.error) throw new Error(swapData.error);
+
+  const outAmount = parseInt(quote.outAmount) / Math.pow(10, outputToken.decimals);
+  return {
+    swapTransaction: swapData.swapTransaction,
+    summary: { fromToken, toToken, inputAmount: amountIn / Math.pow(10, inputToken.decimals), outputAmount: outAmount, priceImpactPct: parseFloat(quote.priceImpactPct || '0'), route: quote.routePlan?.map((r: any) => r.swapInfo?.label).filter(Boolean).join(' → ') || 'Jupiter' },
+  };
 }
 
-async function resolveToken(symbolOrMint: string): Promise<JupiterToken | null> {
-  const tokens = await getTokenList();
-
-  // If it looks like a mint address (base58, 32-44 chars), match directly
-  if (symbolOrMint.length >= 32) {
-    return tokens.find(t => t.address === symbolOrMint) || null;
-  }
-
-  // Otherwise match by symbol (case-insensitive, prefer exact match)
-  const upper = symbolOrMint.toUpperCase();
-  const exact = tokens.find(t => t.symbol.toUpperCase() === upper);
-  return exact || null;
-}
-
-// GET /api/swap?fromToken=USDC&toToken=SOL&amount=10&userPublicKey=xxx
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const fromToken = searchParams.get('fromToken');
-  const toToken = searchParams.get('toToken');
+  const fromToken = searchParams.get('fromToken')?.toUpperCase();
+  const toToken = searchParams.get('toToken')?.toUpperCase();
   const amount = parseFloat(searchParams.get('amount') || '0');
   const userPublicKey = searchParams.get('userPublicKey');
 
   if (!fromToken || !toToken || !amount || !userPublicKey) {
-    return NextResponse.json({ error: 'Missing required params' }, { status: 400 });
+    return NextResponse.json({ error: 'Missing params' }, { status: 400 });
   }
 
+  const inputToken = TOKEN_MINTS[fromToken];
+  const outputToken = TOKEN_MINTS[toToken];
+  if (!inputToken) return NextResponse.json({ error: `Unknown token: ${fromToken}` }, { status: 400 });
+  if (!outputToken) return NextResponse.json({ error: `Unknown token: ${toToken}` }, { status: 400 });
+
+  const amountIn = Math.floor(amount * Math.pow(10, inputToken.decimals));
+
   try {
-    const [inputToken, outputToken] = await Promise.all([
-      resolveToken(fromToken),
-      resolveToken(toToken),
-    ]);
-
-    if (!inputToken) return NextResponse.json({ error: `Token not found: ${fromToken}` }, { status: 400 });
-    if (!outputToken) return NextResponse.json({ error: `Token not found: ${toToken}` }, { status: 400 });
-
-    const amountInSmallestUnit = Math.floor(amount * Math.pow(10, inputToken.decimals));
-
-    const quoteRes = await fetch(
-      `https://quote-api.jup.ag/v6/quote?inputMint=${inputToken.address}&outputMint=${outputToken.address}&amount=${amountInSmallestUnit}&slippageBps=50`,
-      { headers: { 'Accept': 'application/json' } }
-    );
-    const quote = await quoteRes.json();
-
-    if (quote.error) return NextResponse.json({ error: quote.error }, { status: 400 });
-
-    const outAmount = parseInt(quote.outAmount) / Math.pow(10, outputToken.decimals);
-    const priceImpact = parseFloat(quote.priceImpactPct || '0');
-
-    return NextResponse.json({
-      quote,
-      summary: {
-        fromToken: inputToken.symbol,
-        toToken: outputToken.symbol,
-        inputAmount: amount,
-        outputAmount: outAmount,
-        priceImpactPct: priceImpact,
-        slippageBps: 50,
-        route: quote.routePlan?.map((r: any) => r.swapInfo?.label).filter(Boolean).join(' → '),
-      }
-    });
-
-  } catch (error) {
-    console.error('Swap quote error:', error);
-    return NextResponse.json({ error: 'Failed to get swap quote' }, { status: 500 });
-  }
-}
-
-// POST /api/swap — builds the swap transaction for the client to sign
-export async function POST(req: NextRequest) {
-  try {
-    const { quote, userPublicKey } = await req.json();
-
-    if (!quote || !userPublicKey) {
-      return NextResponse.json({ error: 'Missing quote or userPublicKey' }, { status: 400 });
-    }
-
-    const swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        quoteResponse: quote,
-        userPublicKey,
-        wrapAndUnwrapSol: true,
-        dynamicComputeUnitLimit: true,
-        prioritizationFeeLamports: 'auto',
-      }),
-    });
-
-    const swapData = await swapRes.json();
-
-    if (swapData.error) {
-      return NextResponse.json({ error: swapData.error }, { status: 400 });
-    }
-
-    return NextResponse.json({ swapTransaction: swapData.swapTransaction });
-
-  } catch (error) {
-    console.error('Swap build error:', error);
-    return NextResponse.json({ error: 'Failed to build swap transaction' }, { status: 500 });
+    const result = await getQuoteAndSwapTx(inputToken, outputToken, amountIn, userPublicKey, fromToken, toToken);
+    return NextResponse.json(result);
+  } catch (err: any) {
+    console.error('Swap error:', err);
+    return NextResponse.json({ error: err.message || 'Swap unavailable' }, { status: 503 });
   }
 }
