@@ -380,6 +380,42 @@ export default function AurraChat() {
         .aurra-root { display: flex; flex-direction: column; height: 100vh; max-width: 780px; margin: 0 auto; position: relative; }
         .aurra-root::before { content: ''; position: fixed; top: -200px; left: 50%; transform: translateX(-50%); width: 600px; height: 600px; background: radial-gradient(circle, rgba(99,60,255,0.12) 0%, transparent 70%); pointer-events: none; z-index: 0; }
 
+        .wallet-adapter-modal-wrapper {
+          background: #0f0f17 !important;
+          border: 1px solid rgba(124,58,237,0.3) !important;
+          border-radius: 16px !important;
+          margin: 0 8px !important;
+          padding: 16px !important;
+        }
+        .wallet-adapter-modal-title {
+          color: #fff !important;
+          font-family: 'Syne', sans-serif !important;
+        }
+        .wallet-adapter-modal-list .wallet-adapter-button {
+          background: rgba(255,255,255,0.04) !important;
+          border: 1px solid rgba(255,255,255,0.08) !important;
+          border-radius: 10px !important;
+          color: #e0ddf0 !important;
+          height: 48px !important;
+          font-size: 14px !important;
+        }
+        .wallet-adapter-modal-list .wallet-adapter-button:hover {
+          background: rgba(124,58,237,0.15) !important;
+          border-color: rgba(124,58,237,0.35) !important;
+        }
+        .wallet-adapter-modal-list .wallet-adapter-button-end-icon,
+        .wallet-adapter-modal-list .wallet-adapter-button-start-icon {
+          width: 28px !important;
+          height: 28px !important;
+        }
+        .wallet-adapter-modal-overlay {
+          background: rgba(0,0,0,0.7) !important;
+          backdrop-filter: blur(4px) !important;
+        }
+        .wallet-adapter-modal-button-close {
+          background: rgba(255,255,255,0.06) !important;
+        }
+
         .aurra-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; border-bottom: 1px solid rgba(255,255,255,0.06); background: rgba(8,9,16,0.95); backdrop-filter: blur(12px); position: sticky; top: 0; z-index: 10; }
         .aurra-logo { display: flex; align-items: center; gap: 10px; }
         .aurra-logo-img { height: 52px; width: auto; object-fit: contain; filter: drop-shadow(0 0 8px rgba(139,92,246,0.4)); }
