@@ -3,7 +3,7 @@ import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Aurra — DeFi Copilot on Solana",
+  title: "Aurra - DeFi Copilot on Solana",
   description: "Talk to your Solana wallet. AI-powered DeFi copilot.",
 };
 

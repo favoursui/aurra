@@ -129,7 +129,7 @@ aurra/
 
 ## Built For
 
-**Solana Frontier Hackathon 2026** — [arena.colosseum.org](https://arena.colosseum.org)
+**Solana Frontier Hackathon 2026** - [arena.colosseum.org](https://arena.colosseum.org)
 
 ---
 
