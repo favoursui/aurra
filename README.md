@@ -54,7 +54,7 @@ Aurra reads your on-chain data in real time, understands your intent, and either
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/yourusername/aurra.git
+git clone https://github.com/favoursui/aurra.git
 cd aurra
 ```
 
