@@ -37,16 +37,99 @@ const SUGGESTED_PROMPTS = [
   "What's the best yield on Solana right now?"
 ];
 
+// ── Client-side Jupiter swap builder ─────────────────────────────────────
+// Jupiter APIs work fine from browsers — server-side calls get blocked/503.
+const JUP_QUOTE = 'https://lite-api.jup.ag/swap/v1/quote';
+const JUP_SWAP  = 'https://lite-api.jup.ag/swap/v1/swap';
+
+interface TokenInfo { address: string; decimals: number }
+
+// Top Solana tokens — covers the vast majority of real swap requests
+const WELL_KNOWN: Record<string, TokenInfo> = {
+  SOL:     { address: 'So11111111111111111111111111111111111111112',  decimals: 9 },
+  USDC:    { address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 },
+  USDT:    { address: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6 },
+  BONK:    { address: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', decimals: 5 },
+  WIF:     { address: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm', decimals: 6 },
+  JUP:     { address: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',  decimals: 6 },
+  RAY:     { address: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', decimals: 6 },
+  mSOL:    { address: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',  decimals: 9 },
+  jitoSOL: { address: 'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn',  decimals: 9 },
+  bSOL:    { address: 'bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1',  decimals: 9 },
+  PYTH:    { address: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', decimals: 6 },
+  RNDR:    { address: 'rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof',  decimals: 8 },
+  HNT:     { address: 'hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux',  decimals: 8 },
+  MOBILE:  { address: 'mb1eu7TzEc71KxDpsmsKoucSSuuoGLv1drys1oP2jh6',  decimals: 6 },
+  POPCAT:  { address: '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr', decimals: 9 },
+  WEN:     { address: 'WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk',  decimals: 5 },
+  MYRO:    { address: 'HhJpBhRRn4g56VsyLuT8DL5Bv31HkXqsrahTTUCZeZg4', decimals: 9 },
+  SAMO:    { address: '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU', decimals: 9 },
+  ORCA:    { address: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE',  decimals: 6 },
+  MNGO:    { address: 'MangoCzJ36AjZyKwVj3VnYU4GTonjfVEnJmvvWaxLac',  decimals: 6 },
+  STEP:    { address: 'StepAscQoEioFxxWGnh2sLBDFp9d8rvKz2Yp39iDpyT',  decimals: 9 },
+  MEAN:    { address: 'MEANeD3XDdUmNMsRGjASkSWdC8prLYsoRJ61pPeHctD',  decimals: 6 },
+  SHDW:    { address: 'SHDWyBxihqiCj6YekG2GUr7wqKLeLAMK1gHZck9pL6y',  decimals: 9 },
+  HXRO:    { address: 'HxhWkVpk5NS4Ltg5nij2G671CKXFRKK8VCBDkdxkMpLM', decimals: 8 },
+};
+
+// Runtime cache — seeded with well-known tokens, grows as user's wallet tokens are added
+const tokenCache = new Map<string, TokenInfo>(Object.entries(WELL_KNOWN));
+
+// Called before each swap to seed cache from the user's wallet (they already have the mints)
+function seedFromWallet(walletTokens: Array<{ mint: string; symbol: string; decimals?: number }>) {
+  for (const t of walletTokens) {
+    if (t.symbol && t.mint && !tokenCache.has(t.symbol.toUpperCase())) {
+      tokenCache.set(t.symbol.toUpperCase(), { address: t.mint, decimals: t.decimals ?? 6 });
+    }
+  }
+}
+
+function resolveToken(symbol: string): TokenInfo {
+  const key = symbol.toUpperCase();
+  const info = tokenCache.get(key);
+  if (info) return info;
+  throw new Error(
+    `Token "${symbol}" not recognised. It may not be in the supported list. ` +
+    `Try swapping with a different symbol or check if it's in your wallet.`
+  );
+}
+
+async function buildJupiterSwapTx(
+  fromSymbol: string, toSymbol: string, amount: number, userPublicKey: string,
+): Promise<{ swapTransaction: string; summary: Record<string, any> }> {
+  const inputToken  = resolveToken(fromSymbol);
+  const outputToken = resolveToken(toSymbol);
+  const amountIn = Math.floor(amount * 10 ** inputToken.decimals);
+  const quoteRes = await fetch(`${JUP_QUOTE}?` + new URLSearchParams({
+    inputMint: inputToken.address, outputMint: outputToken.address,
+    amount: String(amountIn), slippageBps: '50',
+  }));
+  if (!quoteRes.ok) throw new Error(`Jupiter quote failed (${quoteRes.status})`);
+  const quote = await quoteRes.json();
+  if (quote.error) throw new Error(`Jupiter: ${quote.error}`);
+  const swapRes = await fetch(JUP_SWAP, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quoteResponse: quote, userPublicKey, wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true, prioritizationFeeLamports: 'auto' }),
+  });
+  if (!swapRes.ok) throw new Error(`Jupiter swap build failed (${swapRes.status})`);
+  const swapData = await swapRes.json();
+  if (swapData.error) throw new Error(`Jupiter: ${swapData.error}`);
+  if (!swapData.swapTransaction) throw new Error('Jupiter returned no transaction');
+  return {
+    swapTransaction: swapData.swapTransaction,
+    summary: {
+      fromToken: fromSymbol.toUpperCase(), toToken: toSymbol.toUpperCase(), inputAmount: amount,
+      outputAmount: parseInt(quote.outAmount) / 10 ** outputToken.decimals,
+      priceImpactPct: parseFloat(quote.priceImpactPct ?? '0'),
+      route: (quote.routePlan ?? []).map((r: any) => r.swapInfo?.label).filter(Boolean).join(' → ') || 'Jupiter',
+    },
+  };
+}
+
+// Minimal mint map kept only for any address-based references
 const TOKEN_MINTS: Record<string, string> = {
   SOL: 'So11111111111111111111111111111111111111112',
   USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-  USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-  BONK: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
-  JUP: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
-  WIF: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
-  mSOL: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',
-  jitoSOL: 'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn',
-  RAY: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
 };
 
 const fmt = (n: number) => n?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -61,7 +144,7 @@ const loadMessages = (): Message[] => {
 };
 
 export default function AurraChat() {
-  const { publicKey, connected, signTransaction } = useWallet();
+  const { publicKey, connected, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const [mounted, setMounted] = useState(false);
   const [messages, setMessages] = useState<Message[]>(defaultMessages);
@@ -115,27 +198,52 @@ export default function AurraChat() {
       return;
     }
 
-    if (!swap.swapTransaction || !signTransaction) return;
+    if (!swap.swapTransaction || !sendTransaction) return;
     setSwap(s => ({ ...s, loading: true, error: null }));
 
     try {
-      const txBuf = Buffer.from(swap.swapTransaction, 'base64');
+      // Decode base64 → Uint8Array without relying on Buffer polyfill
+      const txBuf = Uint8Array.from(atob(swap.swapTransaction), c => c.charCodeAt(0));
       const tx = VersionedTransaction.deserialize(txBuf);
-      const signed = await signTransaction(tx);
-      const rawTx = signed.serialize();
-      const sig = await connection.sendRawTransaction(rawTx, { skipPreflight: false, maxRetries: 3 });
-      await connection.confirmTransaction(sig, 'confirmed');
+
+      // Get fresh blockhash for accurate confirmation deadline
+      const latestBlockhash = await connection.getLatestBlockhash('confirmed');
+
+      // sendTransaction signs + sends atomically via the connected wallet
+      const sig = await sendTransaction(tx, connection, {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+
+      // Confirm using proper blockhash strategy (non-deprecated)
+      const confirmation = await connection.confirmTransaction(
+        { signature: sig, ...latestBlockhash },
+        'confirmed',
+      );
+
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+      }
 
       const { summary } = swap;
       setSwap({ loading: false, swapTransaction: null, summary: null, error: null, success: sig, useJupiterFallback: false });
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `✅ Swap confirmed!\n\n${summary.inputAmount} ${summary.fromToken} → ${summary.outputAmount?.toFixed(4)} ${summary.toToken}\n\nTx: ${sig.slice(0, 20)}...`,
+        content: `✅ Swap confirmed!\n\n${summary.inputAmount} ${summary.fromToken} → ${summary.outputAmount?.toFixed(4)} ${summary.toToken}\n\nView on Solscan: https://solscan.io/tx/${sig}`,
         timestamp: new Date(),
       }]);
       setTimeout(fetchPortfolio, 3000);
     } catch (err: any) {
-      setSwap(s => ({ ...s, loading: false, error: err.message || 'Swap failed. Try again.' }));
+      // Distinguish user cancellation from actual errors
+      const isRejected =
+        err.message?.includes('User rejected') ||
+        err.message?.includes('Transaction cancelled') ||
+        err.code === 4001;
+      setSwap(s => ({
+        ...s,
+        loading: false,
+        error: isRejected ? 'You cancelled the transaction.' : (err.message || 'Swap failed. Try again.'),
+      }));
     }
   };
 
@@ -158,19 +266,15 @@ export default function AurraChat() {
 
       if (data.action?.type === 'swap' && publicKey) {
         const { fromToken, toToken, amount } = data.action;
+        // Show card immediately with loading spinner — Jupiter runs in browser, not server
+        setSwap(s => ({ ...s, loading: true, swapTransaction: null, summary: { fromToken: fromToken.toUpperCase(), toToken: toToken.toUpperCase(), inputAmount: parseFloat(amount) }, error: null, useJupiterFallback: false }));
         try {
-          const swapRes = await fetch(`/api/swap?fromToken=${fromToken}&toToken=${toToken}&amount=${amount}&userPublicKey=${publicKey.toString()}`);
-          const swapData = await swapRes.json();
-
-          if (swapData.swapTransaction) {
-            // Got a real transaction — user just needs to sign
-            setSwap({ loading: false, swapTransaction: swapData.swapTransaction, summary: swapData.summary, error: null, success: null, useJupiterFallback: false });
-          } else {
-            // Server couldn't build tx — show Jupiter fallback card
-            setSwap({ loading: false, swapTransaction: null, summary: { fromToken: fromToken.toUpperCase(), toToken: toToken.toUpperCase(), inputAmount: parseFloat(amount) }, error: swapData.error || null, success: null, useJupiterFallback: true });
-          }
-        } catch {
-          setSwap({ loading: false, swapTransaction: null, summary: { fromToken: fromToken.toUpperCase(), toToken: toToken.toUpperCase(), inputAmount: parseFloat(amount) }, error: null, success: null, useJupiterFallback: true });
+          // Seed token cache from user's wallet so we recognise any token they hold
+          if (walletData?.tokens) seedFromWallet(walletData.tokens);
+          const result = await buildJupiterSwapTx(fromToken, toToken, parseFloat(amount), publicKey.toString());
+          setSwap({ loading: false, swapTransaction: result.swapTransaction, summary: result.summary, error: null, success: null, useJupiterFallback: false });
+        } catch (e: any) {
+          setSwap(s => ({ ...s, loading: false, error: e.message || 'Failed to build swap transaction.' }));
         }
       }
     } catch {
@@ -198,14 +302,12 @@ export default function AurraChat() {
         if (inTable) flushTable();
         if (line.startsWith('**') && line.endsWith('**')) result.push(<strong key={i} style={{ display: 'block', marginTop: '6px', color: '#fff' }}>{line.replace(/\*\*/g, '')}</strong>);
         else if (line === '') result.push(<br key={i} />);
-        else result.push(<p key={i} style={{ margin: '2px 0', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{line}</p>);
+        else result.push(<p key={i} style={{ margin: '2px 0', wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{line.startsWith('View on Solscan:') ? (<>View on Solscan: <a href={line.split(': ')[1]} target="_blank" rel="noopener noreferrer" style={{ color: '#a78bfa', textDecoration: 'underline' }}>{line.split(': ')[1]?.slice(0, 32)}…</a></>) : line}</p>);
       }
     });
     if (inTable) flushTable();
     return result;
   };
-
-  const showSwapCard = (swap.swapTransaction || swap.useJupiterFallback) && swap.summary && !swap.success;
 
   return (
     <div className="aurra-root">
@@ -240,7 +342,7 @@ export default function AurraChat() {
             </div>
           ))}
 
-          {showSwapCard && (
+          {(swap.summary && !swap.success) && (
             <div className="aurra-swap-card">
               <div className="swap-card-header">⚡ Swap Preview</div>
               <div className="swap-route">
@@ -248,21 +350,30 @@ export default function AurraChat() {
                 <span className="swap-arrow">→</span>
                 <div className="swap-token">
                   <span className="swap-symbol">{swap.summary.toToken}</span>
-                  <span className="swap-amount">{swap.summary.outputAmount ? `~${swap.summary.outputAmount.toFixed(4)}` : 'via Jupiter'}</span>
+                  <span className="swap-amount">{swap.summary.outputAmount ? `~${swap.summary.outputAmount.toFixed(4)}` : swap.loading ? '…' : '—'}</span>
                 </div>
               </div>
-              <div className="swap-meta">
-                {swap.summary.route && <span>Route: {swap.summary.route}</span>}
-                {swap.summary.priceImpactPct !== undefined && <span>Price impact: {swap.summary.priceImpactPct.toFixed(3)}%</span>}
-                <span>Slippage: 0.5%</span>
-                {swap.useJupiterFallback && <span style={{ color: '#fbbf24' }}>⚠ Will open Jupiter to complete swap</span>}
-              </div>
+              {!swap.loading && !swap.error && (
+                <div className="swap-meta">
+                  {swap.summary.route && <span>Route: {swap.summary.route}</span>}
+                  {swap.summary.priceImpactPct !== undefined && <span>Price impact: {swap.summary.priceImpactPct.toFixed(3)}%</span>}
+                  <span>Slippage: 0.5%</span>
+                </div>
+              )}
+              {swap.loading && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'rgba(255,255,255,0.4)', margin: '8px 0' }}>
+                  <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', border: '2px solid #7c3aed', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite' }} />
+                  Building swap transaction…
+                </div>
+              )}
               {swap.error && <div className="swap-error">{swap.error}</div>}
               <div className="swap-actions">
-                <button className="swap-btn swap-btn--cancel" onClick={() => setSwap(s => ({ ...s, swapTransaction: null, summary: null, useJupiterFallback: false }))}>Cancel</button>
-                <button className="swap-btn swap-btn--confirm" onClick={executeSwap} disabled={swap.loading}>
-                  {swap.loading ? 'Signing...' : swap.useJupiterFallback ? 'Swap on Jupiter →' : 'Confirm & Sign'}
-                </button>
+                <button className="swap-btn swap-btn--cancel" onClick={() => setSwap(s => ({ ...s, swapTransaction: null, summary: null, error: null, useJupiterFallback: false, loading: false }))}>Cancel</button>
+                {swap.swapTransaction && (
+                  <button className="swap-btn swap-btn--confirm" onClick={executeSwap} disabled={swap.loading}>
+                    {swap.loading ? 'Signing…' : 'Confirm & Sign'}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -337,6 +448,7 @@ export default function AurraChat() {
         .aurra-bubble--loading span:nth-child(2) { animation-delay: 0.2s; }
         .aurra-bubble--loading span:nth-child(3) { animation-delay: 0.4s; }
         @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-6px); opacity: 1; } }
+        @keyframes spin { to { transform: rotate(360deg); } }
         .aurra-time { display: block; font-size: 10px; color: rgba(255,255,255,0.2); margin-top: 6px; text-align: right; }
         .aurra-swap-card { background: rgba(124,58,237,0.08); border: 1px solid rgba(124,58,237,0.25); border-radius: 14px; padding: 16px; margin: 0 44px; animation: fadeUp 0.3s ease; }
         .swap-card-header { font-size: 11px; font-weight: 700; color: #a78bfa; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; }
