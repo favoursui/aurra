@@ -264,7 +264,7 @@ export default function AurraChat() {
     <div className="aurra-root">
       <header className="aurra-header">
         <div className="aurra-logo">
-          <img src="/aurra-logo.png" alt="Aurra" className="aurra-logo-img" />
+          <img src="/aurra-logo.svg" alt="Aurra" className="aurra-logo-img" />
           <span className="aurra-tagline">DeFi Copilot</span>
         </div>
         <div className="aurra-header-right">
@@ -301,7 +301,7 @@ export default function AurraChat() {
         <div className="aurra-messages">
           {messages.map((msg, i) => (
             <div key={i} className={`aurra-message aurra-message--${msg.role}`}>
-              {msg.role === 'assistant' && <div className="aurra-avatar"><img src="/aurra-logo.png" alt="Aurra" style={{width:'22px',height:'22px',objectFit:'contain'}} /></div>}
+              {msg.role === 'assistant' && <div className="aurra-avatar"><img src="/aurra-logo.svg" alt="Aurra" style={{width:'22px',height:'22px',objectFit:'contain'}} /></div>}
               <div className="aurra-bubble">
                 <div className="msg-content">{renderContent(msg.content)}</div>
                 <span className="aurra-time">{msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -341,7 +341,7 @@ export default function AurraChat() {
 
           {loading && (
             <div className="aurra-message aurra-message--assistant">
-              <div className="aurra-avatar"><img src="/aurra-logo.png" alt="Aurra" style={{width:'32px',height:'32px',objectFit:'contain'}} /></div>
+              <div className="aurra-avatar"><img src="/aurra-logo.svg" alt="Aurra" style={{width:'32px',height:'32px',objectFit:'contain'}} /></div>
               <div className="aurra-bubble aurra-bubble--loading"><span /><span /><span /></div>
             </div>
           )}
@@ -441,7 +441,7 @@ export default function AurraChat() {
         .aurra-message { display: flex; gap: 12px; align-items: flex-start; animation: fadeUp 0.3s ease; }
         @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
         .aurra-message--user { flex-direction: row-reverse; }
-        .aurra-avatar { width: 38px; height: 38px; background: linear-gradient(135deg, #7c3aed, #4f46e5); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; box-shadow: 0 0 12px rgba(124,58,237,0.4); }
+        .aurra-avatar { width: 52px; height: 52px; background: transparent; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; padding: 2px; }
         .aurra-bubble { max-width: 75%; padding: 12px 16px; border-radius: 16px; font-size: 14px; line-height: 1.6; position: relative; }
         .aurra-message--assistant .aurra-bubble { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.07); border-top-left-radius: 4px; color: #e0ddf0; }
         .aurra-message--user .aurra-bubble { background: linear-gradient(135deg, rgba(124,58,237,0.3), rgba(79,70,229,0.3)); border: 1px solid rgba(124,58,237,0.3); border-top-right-radius: 4px; color: #f0eeff; }
